@@ -1,0 +1,7 @@
+# Local Python environments and generated files should stay off GitHub.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+*.csv
