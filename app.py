@@ -1,4 +1,5 @@
 """Q-INSIGHT: an explainable customer churn research dashboard."""
+# Dashboard dependencies: data handling, charts, timing, and the Streamlit interface.
 import json
 import time
 from io import StringIO
@@ -12,7 +13,9 @@ from src.classical_model import train_classical
 from src.quantum_model import train_quantum
 from src.evaluation import evaluate_model
 
+# Set the browser-tab title and use the full page width for the dashboard.
 st.set_page_config(page_title="Q-INSIGHT | Customer Intelligence", page_icon="◈", layout="wide")
+# Style the dashboard with a dark theme, custom fonts, cards, and button colors.
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
@@ -27,14 +30,17 @@ h1,h2,h3{font-family:'Space Grotesk',sans-serif!important;letter-spacing:-.03em}
 </style>
 """, unsafe_allow_html=True)
 
+# Show the dashboard title and a short description of its analysis and model-comparison features.
 st.markdown('<div class="hero"><div class="eyebrow">◈ Q-INSIGHT · RESEARCH COMMAND CENTER</div><h1>Quantum Customer Intelligence</h1><div>Behavior analytics · Churn risk · Classical vs quantum experiment</div></div>', unsafe_allow_html=True)
 
+# DATA SOURCE: let the user upload a customer CSV or use clearly labeled synthetic demo data.
 with st.sidebar:
     st.markdown("### DATA SOURCE")
     uploaded = st.file_uploader("Upload a customer CSV", type="csv")
     use_demo = st.toggle("Use clearly labeled DEMO DATA", value=uploaded is None)
     st.caption("Recommended columns follow the Kaggle Telco Customer Churn dataset.")
 
+# Read the uploaded dataset, create demo data when selected, or stop until data is available.
 if uploaded is not None:
     try:
         data = pd.read_csv(uploaded)
@@ -48,22 +54,27 @@ else:
 
 if demo_mode:
     st.info("DEMO DATA — synthetic Telco-like records are used. Results are illustrative and are not Kaggle findings.")
+# TARGET: suggest a likely churn-label column, while letting the user choose another column.
 target_guess = detect_target(data)
 target = st.sidebar.selectbox("Churn label column", list(data.columns), index=list(data.columns).index(target_guess) if target_guess in data.columns else len(data.columns)-1)
+# DATA PROCESSING: validate the target, split customers, and encode/scale features for both models.
 try:
     prepared = prepare_data(data, target)
     X_train, X_test, y_train, y_test, preprocessor, feature_names, raw_train, raw_test = prepared
 except Exception as error:
     st.error(f"Dataset validation failed: {error}"); st.stop()
 
+# SUMMARY METRICS: count customers, observed churn share, prepared features, and missing cells.
 missing = int(data.isna().sum().sum())
 st.markdown('<div class="eyebrow">LIVE CUSTOMER COHORT</div>', unsafe_allow_html=True)
 kpi = st.columns(4)
 for col, label, value in zip(kpi, ["CUSTOMERS", "CHURN RATE", "FEATURES", "MISSING CELLS"], [f"{len(data):,}", f"{y_train.mean():.1%}", str(X_train.shape[1]), str(missing)]):
     col.markdown(f'<div class="metric"><small>{label}</small><strong>{value}</strong></div>', unsafe_allow_html=True)
 
+# Organize the app into data exploration, customer scoring, and model-comparison pages.
 tabs = st.tabs(["01  Analysis", "02  Prediction", "03  Quantum vs Classical"])
 with tabs[0]:
+    # ANALYSIS: compare churn across customer groups and visualize numeric behavior.
     st.subheader("Behavior signals")
     c1, c2 = st.columns([1,1])
     if "Contract" in data:
@@ -71,11 +82,13 @@ with tabs[0]:
         c1.plotly_chart(px.bar(chart, x="Contract", y="Customers", color=target, barmode="group", title="Customer outcomes by contract", color_discrete_sequence=["#55d8f2", "#a187ff"]), use_container_width=True)
     else:
         c1.plotly_chart(px.histogram(data, x=target, color=target, title="Churn vs retention", color_discrete_sequence=["#55d8f2", "#a187ff"]), use_container_width=True)
+        # Categorical features are text/group labels such as Contract or PaymentMethod.
     categorical_cols = [column for column in data.select_dtypes(exclude="number").columns if column != target]
     if categorical_cols:
         category = st.selectbox("Compare churn across a service or payment category", categorical_cols)
         grouped = data.groupby([category, target], dropna=False).size().reset_index(name="Customers")
         st.plotly_chart(px.bar(grouped, x=category, y="Customers", color=target, barmode="group", title=f"Customer outcomes by {category}", color_discrete_sequence=["#55d8f2", "#a187ff"]), use_container_width=True)
+        # Numeric features are measurable values such as tenure or monthly charges.
     numeric_cols = data.select_dtypes(include="number").columns.tolist()
     if numeric_cols:
         selected = st.selectbox("Explore numeric behavior", numeric_cols)
@@ -83,7 +96,8 @@ with tabs[0]:
     else:
         c2.metric("Target balance", f"{data[target].value_counts(normalize=True).max():.1%} largest class")
     st.caption("These charts describe associations in the loaded cohort. They do not establish that a feature causes churn.")
-    # PCA embedding is calculated on transformed rows for visual exploration only.
+    # PCA: compress the prepared customer features into two coordinates for a visual map.
+    # This projection is exploratory; it is separate from the model's training-only split.
     from sklearn.decomposition import PCA
     embedding = PCA(n_components=2, random_state=17).fit_transform(preprocessor.transform(data.drop(columns=[target]).drop(columns=[c for c in data if str(c).lower() in {"customerid","id"}], errors="ignore")))
     plot = pd.DataFrame({"PC1": embedding[:,0], "PC2": embedding[:,1], "Label": data[target].astype(str)})
@@ -94,11 +108,13 @@ with tabs[0]:
         if len(rates): st.info(f"Observed churn share ranges from {rates.min():.0%} to {rates.max():.0%} across contracts. This is a data-supported association, not a causal effect.")
 
 with tabs[1]:
+    # PREDICTION: use the trained classical model to score one customer or a batch CSV.
     st.subheader("Single customer risk")
     classical = st.session_state.get("classical_model")
     if classical is None:
         st.warning("Train the baseline in Quantum vs Classical first to enable model predictions.")
     else:
+        # Build one customer profile using values observed in the training data.
         row = {}
         inputs = st.columns(3)
         for index, column in enumerate(raw_train.columns):
@@ -109,6 +125,7 @@ with tabs[1]:
                 else:
                     options = values.astype(str).value_counts().index.tolist()
                     row[column] = st.selectbox(column, options, key=f"form_{column}")
+        # Transform the profile with the same preprocessing used during model training, then estimate risk.
         if st.button("Predict Customer Churn", type="primary"):
             try:
                 sample = pd.DataFrame([row], columns=raw_train.columns)
@@ -130,6 +147,7 @@ with tabs[1]:
                 st.write(f"Quantum simulator estimate: **{qprob:.1%}**")
                 if (qprob >= .5) != (probability >= .5): st.warning("Models disagree on the 0.5 classification threshold; review this customer rather than treating either estimate as certain.")
             st.info("Suggested action: review account context and offer a relevant service or contract conversation. The score is a screening signal, not a decision.")
+    # Batch scoring applies the trained baseline to every row in an uploaded feature-only CSV.
     st.markdown("#### Batch CSV scoring")
     batch_file = st.file_uploader("Upload feature rows (same columns as training data)", type="csv", key="batch")
     if batch_file and classical:
@@ -144,9 +162,11 @@ with tabs[1]:
         except Exception as error: st.error(f"Batch validation failed: {error}")
 
 with tabs[2]:
+    # MODEL EXPERIMENT: train both approaches on the same prepared train/test split.
     st.subheader("Reproducible model experiment")
     st.caption("Both models use the same stratified held-out customers. Quantum PCA and feature scaling are fitted on training rows only.")
     train_col, q_col = st.columns(2)
+    # Classical model: fit Logistic Regression and measure its held-out performance and runtime.
     if train_col.button("Train Classical Baseline", type="primary"):
         with st.spinner("Fitting Logistic Regression…"):
             model, elapsed = train_classical(X_train, y_train)
@@ -154,6 +174,7 @@ with tabs[2]:
             st.session_state["classical_model"] = model
             st.session_state["classical_eval"] = measured
             st.session_state["classical_seconds"] = elapsed
+    # Quantum model: run a small four-qubit circuit simulation; errors are shown without fake metrics.
     if q_col.button("Train Quantum Simulator"):
         try:
             with st.spinner("Running four-qubit variational classifier on Aer simulator…"):
@@ -162,14 +183,17 @@ with tabs[2]:
                 st.session_state["quantum_result"] = result
         except Exception as error:
             st.session_state["quantum_error"] = str(error)
+    # Show a real simulator/runtime error if quantum training did not finish.
     if "quantum_error" in st.session_state: st.error(f"Quantum model unavailable: {st.session_state['quantum_error']}")
     classical_eval = st.session_state.get("classical_eval")
     quantum_result = st.session_state.get("quantum_result")
+    # Collect only the measurements produced by models that have actually completed training.
     results = []
     if classical_eval:
         for metric in ["accuracy","precision","recall","f1","roc_auc"]: results.append({"Model":"Logistic Regression","Metric":metric,"Score":classical_eval[metric]})
     if quantum_result:
         for metric in ["accuracy","precision","recall","f1","roc_auc"]: results.append({"Model":"Quantum VQC","Metric":metric,"Score":quantum_result["evaluation"][metric]})
+    # COMPARISON: display measured metrics only when at least one model has results.
     if results:
         metrics = pd.DataFrame(results)
         st.plotly_chart(px.bar(metrics, x="Metric", y="Score", color="Model", barmode="group", range_y=[0,1], title="Measured held-out metrics", color_discrete_map={"Logistic Regression":"#55d8f2","Quantum VQC":"#a187ff"}), use_container_width=True)
@@ -184,6 +208,7 @@ with tabs[2]:
         roc_figure.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", name="Chance", line={"color":"#718096","dash":"dash"}))
         roc_figure.update_layout(title="ROC curves · held-out customers", xaxis_title="False positive rate", yaxis_title="True positive rate", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#dce9fa")
         st.plotly_chart(roc_figure, use_container_width=True)
+        # Compare measured training and prediction time for each completed model.
         timing = []
         if classical_eval:
             timing.append({"Model":"Logistic Regression","Training seconds":st.session_state.get("classical_seconds", 0),"Inference seconds":classical_eval["inference_seconds"]})
@@ -191,6 +216,7 @@ with tabs[2]:
             timing.append({"Model":"Quantum VQC","Training seconds":quantum_result["training_seconds"],"Inference seconds":quantum_result["evaluation"]["inference_seconds"]})
         st.markdown("#### Measured runtime")
         st.dataframe(pd.DataFrame(timing), use_container_width=True, hide_index=True)
+        # Display confusion matrices with actual labels in rows and predicted labels in columns.
         for name, result in [("Logistic Regression", classical_eval), ("Quantum VQC", quantum_result["evaluation"] if quantum_result else None)]:
             if result:
                 st.write(f"**{name} · confusion matrix [true rows, predicted columns]**")
@@ -198,15 +224,18 @@ with tabs[2]:
         if classical_eval and quantum_result:
             st.info("Compare recall alongside accuracy: false negatives are customers who churned but were missed. Quantum scores are a small simulator experiment, not evidence of quantum advantage.")
         if quantum_result:
+            # Show the circuit templates, simulator settings, data sample size, and PCA coverage.
             st.markdown("#### Four-qubit circuit setup")
             st.write(f"Aer simulator · training rows {quantum_result['train_rows']} · training time {quantum_result['training_seconds']:.2f}s · PCA variance retained {quantum_result['explained_variance']:.1%}")
             st.code(str(quantum_result["feature_map"]) + "\n+\n" + str(quantum_result["ansatz"]), language="text")
+        # Package the dataset split, settings, measured scores, and limitations into a downloadable report.
         report = {"title":"Q-INSIGHT experiment report","synthetic_demo_data":demo_mode,"dataset_rows":len(data),"train_rows":len(y_train),"test_rows":len(y_test),"seed":17,"configuration":{"classical":"Balanced Logistic Regression","quantum":"4-qubit ZZFeatureMap + RealAmplitudes VQC","quantum_training_row_limit":100,"quantum_optimizer_iterations":25,"decision_threshold":0.5},"classical":({k:v for k,v in classical_eval.items() if k not in {"roc","confusion","predictions","probabilities"}} | {"training_seconds":st.session_state.get("classical_seconds")} if classical_eval else None),"quantum":(({k:v for k,v in quantum_result["evaluation"].items() if k not in {"roc","confusion","predictions","probabilities"}} | {"training_seconds":quantum_result["training_seconds"],"pca_explained_variance":quantum_result["explained_variance"],"training_rows":quantum_result["train_rows"]}) if quantum_result else None),"quantum_error":st.session_state.get("quantum_error"),"limitations":["Simulation only; no physical quantum hardware.","Small PCA representation and bounded training sample.","Metrics describe this dataset split, not guaranteed future performance."]}
         # Convert numpy values for a portable JSON experiment report.
         report_json = json.dumps(report, default=lambda value: np.asarray(value).tolist(), indent=2)
         st.download_button("Download experiment report (JSON)", report_json, "q_insight_experiment_report.json", "application/json")
     else:
         st.info("No measured model results yet. Train either model above to populate comparisons.")
+    # Explain the strongest baseline coefficients as associations, not causes of churn.
     if "classical_model" in st.session_state:
         coefficients = st.session_state["classical_model"].coef_[0]
         top = pd.DataFrame({"Feature":feature_names,"Coefficient":coefficients}).assign(Magnitude=lambda x:x.Coefficient.abs()).nlargest(12,"Magnitude")
